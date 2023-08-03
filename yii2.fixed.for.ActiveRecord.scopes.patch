@@ -1,0 +1,170 @@
+From 91989a32a603a614207c1e4d0071ccd72a78a46f Mon Sep 17 00:00:00 2001
+From: zymeli <710055@qq.com>
+Date: Thu, 3 Aug 2023 22:15:13 +0800
+Subject: [PATCH] yii2.fixed.for.ActiveRecord.scopes
+
+---
+ .../yiisoft/yii2/base/StaticInstanceTrait.php |  6 +++-
+ .../yiisoft/yii2/data/ActiveDataProvider.php  |  8 +++++
+ vendor/yiisoft/yii2/db/ActiveQuery.php        | 20 +++++++++++++
+ vendor/yiisoft/yii2/db/ActiveRecord.php       |  9 ++++++
+ vendor/yiisoft/yii2/db/QueryBuilder.php       | 29 ++++++++++++++++++-
+ 5 files changed, 70 insertions(+), 2 deletions(-)
+
+diff --git a/vendor/yiisoft/yii2/base/StaticInstanceTrait.php b/vendor/yiisoft/yii2/base/StaticInstanceTrait.php
+index 17e1241..5533eaf 100644
+--- a/vendor/yiisoft/yii2/base/StaticInstanceTrait.php
++++ b/vendor/yiisoft/yii2/base/StaticInstanceTrait.php
+@@ -34,7 +34,11 @@ trait StaticInstanceTrait
+     {
+         $className = get_called_class();
+         if ($refresh || !isset(self::$_instances[$className])) {
+-            self::$_instances[$className] = Yii::createObject($className);
++            try {
++                self::$_instances[$className] = (new \ReflectionClass($className))->newInstanceWithoutConstructor();
++            } catch (\Throwable $e) {
++                self::$_instances[$className] = Yii::createObject($className);
++            }
+         }
+         return self::$_instances[$className];
+     }
+diff --git a/vendor/yiisoft/yii2/data/ActiveDataProvider.php b/vendor/yiisoft/yii2/data/ActiveDataProvider.php
+index a8b6e15..99c73fc 100644
+--- a/vendor/yiisoft/yii2/data/ActiveDataProvider.php
++++ b/vendor/yiisoft/yii2/data/ActiveDataProvider.php
+@@ -185,6 +185,14 @@ class ActiveDataProvider extends BaseDataProvider
+                         'desc' => [$attribute => SORT_DESC],
+                         'label' => $model->getAttributeLabel($attribute),
+                     ];
++                    if ($this->query instanceof \yii\db\ActiveQuery) {
++                        $alias = $this->query->getTableAlias();
++                        $sort->attributes["$alias.$attribute"] = [
++                            'asc' => ["$alias.$attribute" => SORT_ASC],
++                            'desc' => ["$alias.$attribute" => SORT_DESC],
++                            'label' => $model->getAttributeLabel($attribute),
++                        ];
++                    }
+                 }
+             } else {
+                 foreach ($sort->attributes as $attribute => $config) {
+diff --git a/vendor/yiisoft/yii2/db/ActiveQuery.php b/vendor/yiisoft/yii2/db/ActiveQuery.php
+index 413255f..2c05730 100644
+--- a/vendor/yiisoft/yii2/db/ActiveQuery.php
++++ b/vendor/yiisoft/yii2/db/ActiveQuery.php
+@@ -133,11 +133,18 @@ class ActiveQuery extends Query implements ActiveQueryInterface
+         return parent::all($db);
+     }
+ 
++    /** @var array query scopes for where, Enh by zyme */
++    public $scopes = [];
++
+     /**
+      * {@inheritdoc}
+      */
+     public function prepare($builder)
+     {
++        $builder->scopes = $this->scopes;
++        $alias = $this->getTableAlias();
++        $builder->tablesAliases = [$alias];
++
+         // NOTE: because the same ActiveQuery may be used to build different SQL statements
+         // (e.g. by ActiveDataProvider, one for count query, the other for row data query,
+         // it is important to make sure the same ActiveQuery can be used to build SQL statements
+@@ -423,6 +430,7 @@ class ActiveQuery extends Query implements ActiveQueryInterface
+         foreach ((array) $with as $name => $callback) {
+             if (is_int($name)) {
+                 $name = $callback;
++                preg_match('/^(.*?)(?:\s+AS\s+|\s+)(\w+)$/i', $name) or $name .= " AS $name";
+                 $callback = null;
+             }
+ 
+@@ -586,6 +594,18 @@ class ActiveQuery extends Query implements ActiveQueryInterface
+         return is_string($joinType) ? $joinType : 'INNER JOIN';
+     }
+ 
++    /** @var string table alias, Enh by zyme */
++    private $_tableAlias = '';
++
++    /**
++     * @return string table alias, Enh by zyme
++     */
++    public function getTableAlias()
++    {
++        $this->_tableAlias or list(, $this->_tableAlias) = $this->getTableNameAndAlias();
++        return $this->_tableAlias;
++    }
++
+     /**
+      * Returns the table name and the table alias for [[modelClass]].
+      * @return array the table name and the table alias.
+diff --git a/vendor/yiisoft/yii2/db/ActiveRecord.php b/vendor/yiisoft/yii2/db/ActiveRecord.php
+index 1302856..24a80fe 100644
+--- a/vendor/yiisoft/yii2/db/ActiveRecord.php
++++ b/vendor/yiisoft/yii2/db/ActiveRecord.php
+@@ -98,6 +98,15 @@ class ActiveRecord extends BaseActiveRecord
+     const OP_ALL = 0x07;
+ 
+ 
++    /**
++     * Return query scopes definition, Enh by zyme
++     * @return array
++     */
++    public static function scopes(): array
++    {
++        return [];
++    }
++
+     /**
+      * Loads default values from database table schema.
+      *
+diff --git a/vendor/yiisoft/yii2/db/QueryBuilder.php b/vendor/yiisoft/yii2/db/QueryBuilder.php
+index b96ffe2..cd7b970 100644
+--- a/vendor/yiisoft/yii2/db/QueryBuilder.php
++++ b/vendor/yiisoft/yii2/db/QueryBuilder.php
+@@ -53,6 +53,12 @@ class QueryBuilder extends \yii\base\BaseObject
+      */
+     public $typeMap = [];
+ 
++    /** @var array query scopes, Enh by zyme */
++    public $scopes = [];
++
++    /** @var array query tables aliases, Enh by zyme */
++    public $tablesAliases = [];
++
+     /**
+      * @var array map of query condition to builder methods.
+      * These methods are used by [[buildCondition]] to build SQL conditions from array syntax.
+@@ -1354,8 +1360,29 @@ class QueryBuilder extends \yii\base\BaseObject
+      */
+     public function buildWhere($condition, &$params)
+     {
++        /** query scopes, Enh by zyme */
++        $arr = [];
++        if ($this->scopes and $this->tablesAliases) {
++            // TODO: only for mysql?
++            $alias = $this->db->quoteSql(current($this->tablesAliases));
++            $alias = str_replace('`', '', $alias);
++            foreach ($this->scopes as $scope) {
++                $scope = is_array($scope) ? $scope : [$scope];
++                array_walk_recursive($scope, function (&$v) {
++                    is_callable($v) and $v = call_user_func($v);
++                });
++                $swe = $this->buildCondition($scope, $params);
++                $swe = preg_replace('/(?<!`.)(`\w+`)(?!.`)/', "`$alias`.\$1", $swe);
++                $swe != '' and $arr[] = "( $swe )";
++            }
++            // !!!! unset.it !!!!
++            $this->scopes = $this->tablesAliases = [];
++        }
++        $prewe = implode(' AND ', $arr);
++        count($arr) > 1 and $prewe = "( $prewe )";
+         $where = $this->buildCondition($condition, $params);
+-
++        $where != '' and $where = "( $where )";
++        $where = implode(' AND ', array_filter([$prewe, $where]));
+         return $where === '' ? '' : 'WHERE ' . $where;
+     }
+ 
+-- 
+2.40.1.windows.1
+
