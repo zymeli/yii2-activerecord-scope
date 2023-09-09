@@ -22,14 +22,24 @@ enum ScopeEnum implements ScopeEnumInterface
 
     /**
      * 返回枚举实例解析后的范围值
-     * @param Application $app
+     * @param null|Application|array $app
      * @param array $params
      * @return string|array|int|float|bool|null
      */
-    public function parse(Application $app, array $params = []): string|array|int|float|bool|null
+    public function parse(null|Application|array $app = null, array $params = []): string|array|int|float|bool|null
     {
+        ScopeManager::pause();
+        $result = $this->parseInternal($app, $params);
+        ScopeManager::resume();
+        return $result;
+    }
+
+    protected function parseInternal(null|Application|array $app = null, array $params = []): string|array|int|float|bool|null
+    {
+        is_array($app) and $params = $params ?: $app;
+        ($app instanceof Application) or $app = Yii::$app;
         return match ($this) {
-            self::ScopeByNotDeleted => $this->ScopeByNotDeleted($params),
+            self::ScopeByNotDeleted => $this->scopeByNotDeleted($params),
             default => $params,
         };
     }
@@ -37,7 +47,7 @@ enum ScopeEnum implements ScopeEnumInterface
     /**
      * 范围值：数据未删除状态
      */
-    protected function ScopeByNotDeleted(array $params): array
+    protected function scopeByNotDeleted(array $params): array
     {
         return $params;
     }

@@ -15,6 +15,9 @@ class ScopeManager
     /** @var int 活动状态，标记AR适用哪一级 */
     private static int $activeLevel = 0;
 
+    /** @var int 功能暂停时活动状态，标记AR暂停时在哪一级 */
+    private static int $pauseLevel = 0;
+
     /**
      * 打开嵌套，附加worker信息
      * @param callable $callback 打开嵌套，开始scope.worker处理
@@ -51,5 +54,22 @@ class ScopeManager
     public static function getActiveLevel(): int
     {
         return self::$activeLevel;
+    }
+
+    /**
+     * 让活动暂停
+     */
+    public static function pause(): void
+    {
+        self::$pauseLevel = self::$activeLevel;
+        self::$activeLevel = 0;
+    }
+
+    /**
+     * 让活动恢复
+     */
+    public static function resume(): void
+    {
+        self::$activeLevel = self::$pauseLevel;
     }
 }
