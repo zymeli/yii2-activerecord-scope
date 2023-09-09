@@ -1,0 +1,129 @@
+From c34bb271d8d03bc094ffa32c9d5146544d6097bd Mon Sep 17 00:00:00 2001
+From: zymeli <710055@qq.com>
+Date: Sun, 10 Sep 2023 00:10:48 +0800
+Subject: [PATCH] yii2.2.0.49.fixed.for.ActiveRecord.scopes
+
+---
+ vendor/yiisoft/yii2/db/ActiveQuery.php  | 19 +++++++++++++++++++
+ vendor/yiisoft/yii2/db/ActiveRecord.php |  8 ++++++++
+ vendor/yiisoft/yii2/db/QueryBuilder.php | 34 ++++++++++++++++++++++++++++++++++
+ 3 files changed, 61 insertions(+)
+
+diff --git a/vendor/yiisoft/yii2/db/ActiveQuery.php b/vendor/yiisoft/yii2/db/ActiveQuery.php
+index 413255f..47248f4 100644
+--- a/vendor/yiisoft/yii2/db/ActiveQuery.php
++++ b/vendor/yiisoft/yii2/db/ActiveQuery.php
+@@ -133,11 +133,18 @@ class ActiveQuery extends Query implements ActiveQueryInterface
+         return parent::all($db);
+     }
+ 
++    /** @var array query scopes for where, Enh by zyme */
++    public $scopes = [];
++
+     /**
+      * {@inheritdoc}
+      */
+     public function prepare($builder)
+     {
++        $builder->scopes = $this->scopes;
++        $alias = $this->getTableAlias();
++        $builder->tablesAliases = [$alias];
++
+         // NOTE: because the same ActiveQuery may be used to build different SQL statements
+         // (e.g. by ActiveDataProvider, one for count query, the other for row data query,
+         // it is important to make sure the same ActiveQuery can be used to build SQL statements
+@@ -586,6 +593,18 @@ class ActiveQuery extends Query implements ActiveQueryInterface
+         return is_string($joinType) ? $joinType : 'INNER JOIN';
+     }
+ 
++    /** @var string table alias, Enh by zyme */
++    private $tableAlias = '';
++
++    /**
++     * @return string table alias, Enh by zyme
++     */
++    public function getTableAlias()
++    {
++        $this->tableAlias or list(, $this->tableAlias) = $this->getTableNameAndAlias();
++        return $this->tableAlias;
++    }
++
+     /**
+      * Returns the table name and the table alias for [[modelClass]].
+      * @return array the table name and the table alias.
+diff --git a/vendor/yiisoft/yii2/db/ActiveRecord.php b/vendor/yiisoft/yii2/db/ActiveRecord.php
+index 1302856..dbb5b9f 100644
+--- a/vendor/yiisoft/yii2/db/ActiveRecord.php
++++ b/vendor/yiisoft/yii2/db/ActiveRecord.php
+@@ -97,6 +97,14 @@ class ActiveRecord extends BaseActiveRecord
+      */
+     const OP_ALL = 0x07;
+ 
++    /**
++     * Return query scopes definition, Enh by zyme
++     * @return array
++     */
++    public static function scopes(): array
++    {
++        return [];
++    }
+ 
+     /**
+      * Loads default values from database table schema.
+diff --git a/vendor/yiisoft/yii2/db/QueryBuilder.php b/vendor/yiisoft/yii2/db/QueryBuilder.php
+index 114116e..768a99e 100644
+--- a/vendor/yiisoft/yii2/db/QueryBuilder.php
++++ b/vendor/yiisoft/yii2/db/QueryBuilder.php
+@@ -53,6 +53,12 @@ class QueryBuilder extends \yii\base\BaseObject
+      */
+     public $typeMap = [];
+ 
++    /** @var array query scopes, Enh by zyme */
++    public $scopes = [];
++
++    /** @var array query tables aliases, Enh by zyme */
++    public $tablesAliases = [];
++
+     /**
+      * @var array map of query condition to builder methods.
+      * These methods are used by [[buildCondition]] to build SQL conditions from array syntax.
+@@ -1355,8 +1361,36 @@ class QueryBuilder extends \yii\base\BaseObject
+      */
+     public function buildWhere($condition, &$params)
+     {
++        /** query scopes, Enh by zyme */
++        $arr = [];
++        if ($this->scopes and $this->tablesAliases) {
++            $fn = static function (&$v) use (&$fn) {
++                if ($v instanceof \Closure || (is_array($v) && is_callable($v))) {
++                    $v = call_user_func($v);
++                } elseif (is_array($v)) {
++                    array_walk($v, $fn);
++                }
++            };
++            // TODO: only for mysql?
++            $alias = $this->db->quoteSql(current($this->tablesAliases));
++            $alias = str_replace('`', '', $alias);
++            foreach ($this->scopes as $scope) {
++                $scopes = [$scope];
++                array_walk($scopes, $fn);
++                $scope = current($scopes);
++                $swe = $this->buildCondition($scope, $params);
++                $swe = preg_replace('/(?<!`.)(`\w+`)(?!.`)/', "`$alias`.\$1", $swe);
++                $swe != '' and $arr[] = "( $swe )";
++            }
++            // !!!! unset.it !!!!
++            $this->scopes = $this->tablesAliases = [];
++        }
++        $prewe = implode(' AND ', $arr);
++        count($arr) > 1 and $prewe = "( $prewe )";
+         $where = $this->buildCondition($condition, $params);
+ 
++        $where != '' and $where = "( $where )";
++        $where = implode(' AND ', array_filter([$prewe, $where]));
+         return $where === '' ? '' : 'WHERE ' . $where;
+     }
+ 
+-- 
+2.40.1.windows.1
+
